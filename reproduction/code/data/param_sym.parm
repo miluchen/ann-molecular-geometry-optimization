@@ -1,0 +1,15 @@
+4	# atomtype num
+4.6	# radial cutoff
+3.1	# angular cutoff
+1	# number of eta for radial environment
+8	# number of Rs for radial
+1	# number of zeta for angular
+4	# number of theta for angular
+1	# number of eta for angular
+2	# number of Rs for angular
+4.0	# radial etas
+0.5 1.17 1.83 2.50 3.17 3.83 4.50 5.17	# radial Rss
+8.0										# angular zetas
+0.0 1.57 3.14 4.71						# angular thetas
+1										# angular etas
+1.17 2.50								# angular Rss
