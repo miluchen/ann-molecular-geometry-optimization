@@ -12,7 +12,7 @@ aev_cpu:
 
 # Build executable for GPU version of symmetry function
 aev_gpu:
-	$(CXX) $(CXXFLAGS) gpu/symmetry_function/sym_main.cu gpu/symmetry_function/sym_func.cu -o $(BIN_DIR)/sym_gpu -std=c++14
+	$(CXX) $(CXXFLAGS) gpu/symmetry_function/sym_main.cu gpu/symmetry_function/sym_func.cu -o $(BIN_DIR)/sym_gpu
 
 # Create bin directory if it doesn't exist
 $(BIN_DIR):
