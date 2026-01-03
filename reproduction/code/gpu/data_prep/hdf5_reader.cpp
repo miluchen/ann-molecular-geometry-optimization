@@ -1,16 +1,20 @@
 #include <H5Cpp.h>
 #include <vector>
 #include <iostream>
+#include <fstream>
 #include <stdexcept>
 #include <string>
 #include <algorithm>
+#include <iomanip>
 
 using namespace std;
 
 // ------------------------------------------------------------
-// Read one molecule group
+// Read one molecule group and write to streams
 // ------------------------------------------------------------
-void readMolecule(const H5::Group& group, const string& groupName)
+void readMolecule(const H5::Group& group, const string& groupName,
+                  ofstream& coordStream, ofstream& atomStream, 
+                  ofstream& energyStream, ofstream& metaStream)
 {
     // ---------- coordinates ----------
     H5::DataSet coordDS = group.openDataSet("coordinates");
@@ -81,16 +85,33 @@ void readMolecule(const H5::Group& group, const string& groupName)
         species.push_back(str);
     }
 
-    // ---------- Example output ----------
-    cout << "Molecule group: " << groupName << endl;
-    cout << "  Frames:  " << nFrames << endl;
-    cout << "  Atoms:   " << nAtoms << endl;
-    cout << "  Species: ";
-    for (const string& s : species) cout << s << " ";
-    cout << endl;
-    cout << "  Energy[0]: " << energies[0] << endl;
-    cout << "  Energy[" << (nFrames-1) << "]: " << energies[nFrames-1] << endl;
-    cout << endl;
+    // ---------- Write to streams ----------
+    // Write coordinates: format: x y z (one line per atom per frame)
+    coordStream << fixed << setprecision(6);
+    for (hsize_t f = 0; f < nFrames; ++f) {
+        for (hsize_t a = 0; a < nAtoms; ++a) {
+            size_t idx = f * nAtoms * 3 + a * 3;
+            coordStream << coordinates[idx] << " "
+                       << coordinates[idx + 1] << " "
+                       << coordinates[idx + 2] << "\n";
+        }
+    }
+
+    // Write atoms/species: format: species (one per atom, repeated for each frame)
+    for (hsize_t f = 0; f < nFrames; ++f) {
+        for (hsize_t a = 0; a < nAtoms; ++a) {
+            atomStream << species[a] << "\n";
+        }
+    }
+
+    // Write energies: format: energy (one per frame)
+    energyStream << fixed << setprecision(10);
+    for (hsize_t f = 0; f < nFrames; ++f) {
+        energyStream << energies[f] << "\n";
+    }
+
+    // Write metadata: format: groupName nAtoms
+    metaStream << groupName << " " << nAtoms << "\n";
 }
 
 // ------------------------------------------------------------
@@ -98,12 +119,25 @@ void readMolecule(const H5::Group& group, const string& groupName)
 // ------------------------------------------------------------
 int main(int argc, char* argv[])
 {
-    if (argc != 2) {
-        cerr << "Usage: " << argv[0] << " <file.h5>" << endl;
+    if (argc != 3) {
+        cerr << "Usage: " << argv[0] << " <file.h5> <output_prefix>" << endl;
         return 1;
     }
 
     const string filename = argv[1];
+    const string outputPrefix = argv[2];
+
+    // Open output streams
+    ofstream coordStream(outputPrefix + ".xyz");
+    ofstream atomStream(outputPrefix + ".atom");
+    ofstream energyStream(outputPrefix + ".e");
+    ofstream metaStream(outputPrefix + ".meta");
+
+    if (!coordStream.is_open() || !atomStream.is_open() || 
+        !energyStream.is_open() || !metaStream.is_open()) {
+        cerr << "Error: Could not open output files" << endl;
+        return 1;
+    }
 
     try {
         H5::H5File file(filename, H5F_ACC_RDONLY);
@@ -131,11 +165,17 @@ int main(int argc, char* argv[])
                     if (molType == H5G_GROUP) {
                         H5::Group molGroup = topLevelGroup.openGroup(molName);
                         string fullPath = "/" + topLevelName + "/" + molName;
-                        readMolecule(molGroup, fullPath);
+                        readMolecule(molGroup, fullPath, coordStream, atomStream, 
+                                   energyStream, metaStream);
                     }
                 }
             }
         }
+
+        coordStream.close();
+        atomStream.close();
+        energyStream.close();
+        metaStream.close();
     }
     catch (H5::Exception& e) {
         e.printErrorStack();
