@@ -6,6 +6,7 @@
 #include <string>
 #include <algorithm>
 #include <iomanip>
+#include "../chemdata/chemdata.h"
 
 using namespace std;
 
@@ -33,8 +34,10 @@ void readMolecule(const H5::Group& group, const string& groupName,
     if (xyzDim != 3)
         throw runtime_error(groupName + ": coordinates third dimension must be 3");
 
-    vector<float> coordinates(nFrames * nAtoms * 3);
-    coordDS.read(coordinates.data(), H5::PredType::NATIVE_FLOAT);
+    float *coordinates = new float[nFrames * nAtoms * 3];
+    coordDS.read(coordinates, H5::PredType::NATIVE_FLOAT);
+    coordStream.write((char *)coordinates, nFrames * nAtoms * 3 * sizeof(float));
+    delete [] coordinates;
 
     // ---------- energies ----------
     H5::DataSet energyDS = group.openDataSet("energies");
@@ -51,8 +54,10 @@ void readMolecule(const H5::Group& group, const string& groupName,
                            to_string(energyDims[0]) + ") must match coordinates first dimension (" + 
                            to_string(nFrames) + ")");
 
-    vector<double> energies(nFrames);
-    energyDS.read(energies.data(), H5::PredType::NATIVE_DOUBLE);
+    double *energies = new double[nFrames];
+    energyDS.read(energies, H5::PredType::NATIVE_DOUBLE);
+    energyStream.write((char *)energies, nFrames * sizeof(double));
+    delete [] energies;
 
     // ---------- species ----------
     H5::DataSet speciesDS = group.openDataSet("species");
@@ -72,46 +77,104 @@ void readMolecule(const H5::Group& group, const string& groupName,
     // Read species as fixed-size strings (STRSIZE 1)
     H5::DataType dtype = speciesDS.getDataType();
     size_t str_len = dtype.getSize(); // Should be 1 for STRSIZE 1
-    vector<char> speciesBuf(nAtoms * str_len);
-    speciesDS.read(speciesBuf.data(), dtype);
+    char *speciesBuf = new char[nAtoms * str_len];
+    speciesDS.read(speciesBuf, dtype);
+    for (size_t i = 0; i < nFrames; i++) {
+        atomStream.write((char *)speciesBuf, nAtoms * str_len * sizeof(char));
+    }
+    delete [] speciesBuf;
     
-    // Convert to vector of strings
-    vector<string> species;
-    for (size_t i = 0; i < nAtoms; ++i) {
-        string str(speciesBuf.data() + i * str_len, str_len);
-        // Remove null terminators and trailing whitespace
-        str.erase(find(str.begin(), str.end(), '\0'), str.end());
-        while (!str.empty() && str.back() == ' ') str.pop_back();
-        species.push_back(str);
-    }
+    int *meta = new int[nFrames];
+    for (size_t i = 0; i < nFrames; i++)
+        meta[i] = nAtoms;
+    metaStream.write((char *)meta, nFrames * sizeof(int));
+    delete [] meta;
 
-    // ---------- Write to streams ----------
-    // Write coordinates: format: x y z (one line per atom per frame)
-    coordStream << fixed << setprecision(6);
-    for (hsize_t f = 0; f < nFrames; ++f) {
-        for (hsize_t a = 0; a < nAtoms; ++a) {
-            size_t idx = f * nAtoms * 3 + a * 3;
-            coordStream << coordinates[idx] << " "
-                       << coordinates[idx + 1] << " "
-                       << coordinates[idx + 2] << "\n";
+    cout << "Molecule group: " << groupName << endl;
+    cout << "  Frames:  " << nFrames << endl;
+    cout << "  Atoms:   " << nAtoms << endl;
+}
+
+// Process the H5 file, find the number of conformations and atoms of all molecules, and
+// write the ChemData header for the output files
+void writeChemDataHeader(const string& filename, ofstream& coordStream, ofstream& atomStream, 
+    ofstream& energyStream, ofstream& metaStream) {
+    int numberOfConformations = 0;
+    int numberOfAtoms = 0;
+    H5::H5File file(filename, H5F_ACC_RDONLY);
+    H5::Group root = file.openGroup("/");
+    hsize_t nObjs = root.getNumObjs();
+    for (hsize_t i = 0; i < nObjs; ++i) {
+        string topLevelName = root.getObjnameByIdx(i);
+        H5G_obj_t type = root.getObjTypeByIdx(i);
+
+        if (type == H5G_GROUP) {
+            H5::Group topLevelGroup = root.openGroup(topLevelName);
+            
+            // Iterate over molecule groups (e.g., "gdb11_s01-0", "gdb11_s01-1", ...)
+            hsize_t nMolObjs = topLevelGroup.getNumObjs();
+            
+            for (hsize_t j = 0; j < nMolObjs; ++j) {
+                string molName = topLevelGroup.getObjnameByIdx(j);
+                H5G_obj_t molType = topLevelGroup.getObjTypeByIdx(j);
+                
+                if (molType == H5G_GROUP) {
+                    H5::Group molGroup = topLevelGroup.openGroup(molName);
+                    // ---------- coordinates ----------
+                    H5::DataSet coordDS = molGroup.openDataSet("coordinates");
+                    H5::DataSpace coordSpace = coordDS.getSpace();
+                    hsize_t coordDims[3];
+                    coordSpace.getSimpleExtentDims(coordDims, nullptr);
+                    numberOfConformations += coordDims[0];
+                    numberOfAtoms += coordDims[1] * coordDims[0];
+                }
+            }
         }
     }
+    ChemData header(numberOfConformations, 1, sizeof(int));
+    metaStream.write((char *)&header, sizeof(ChemData));
+    header = ChemData(numberOfConformations, 1, sizeof(double));
+    energyStream.write((char *)&header, sizeof(ChemData));
+    header = ChemData(numberOfAtoms, 1, sizeof(char));
+    atomStream.write((char *)&header, sizeof(ChemData));
+    header = ChemData(numberOfAtoms, 3, sizeof(float));
+    coordStream.write((char *)&header, sizeof(ChemData));
 
-    // Write atoms/species: format: species (one per atom, repeated for each frame)
-    for (hsize_t f = 0; f < nFrames; ++f) {
-        for (hsize_t a = 0; a < nAtoms; ++a) {
-            atomStream << species[a] << "\n";
+    file.close();
+}
+
+void writeData(const string& filename, ofstream& coordStream, ofstream& atomStream, 
+    ofstream& energyStream, ofstream& metaStream) {
+    H5::H5File file(filename, H5F_ACC_RDONLY);
+    // Open root group
+    H5::Group root = file.openGroup("/");
+    // Iterate over root-level groups (e.g., "gdb11_s01")
+    hsize_t nObjs = root.getNumObjs();
+
+    for (hsize_t i = 0; i < nObjs; ++i) {
+        string topLevelName = root.getObjnameByIdx(i);
+        H5G_obj_t type = root.getObjTypeByIdx(i);
+
+        if (type == H5G_GROUP) {
+            H5::Group topLevelGroup = root.openGroup(topLevelName);
+            
+            // Iterate over molecule groups (e.g., "gdb11_s01-0", "gdb11_s01-1", ...)
+            hsize_t nMolObjs = topLevelGroup.getNumObjs();
+            
+            for (hsize_t j = 0; j < nMolObjs; ++j) {
+                string molName = topLevelGroup.getObjnameByIdx(j);
+                H5G_obj_t molType = topLevelGroup.getObjTypeByIdx(j);
+                
+                if (molType == H5G_GROUP) {
+                    H5::Group molGroup = topLevelGroup.openGroup(molName);
+                    string fullPath = "/" + topLevelName + "/" + molName;
+                    readMolecule(molGroup, fullPath, coordStream, atomStream, 
+                                energyStream, metaStream);
+                }
+            }
         }
     }
-
-    // Write energies: format: energy (one per frame)
-    energyStream << fixed << setprecision(10);
-    for (hsize_t f = 0; f < nFrames; ++f) {
-        energyStream << energies[f] << "\n";
-    }
-
-    // Write metadata: format: groupName nAtoms
-    metaStream << groupName << " " << nAtoms << "\n";
+    file.close();
 }
 
 // ------------------------------------------------------------
@@ -127,11 +190,11 @@ int main(int argc, char* argv[])
     const string filename = argv[1];
     const string outputPrefix = argv[2];
 
-    // Open output streams
-    ofstream coordStream(outputPrefix + ".xyz");
-    ofstream atomStream(outputPrefix + ".atom");
-    ofstream energyStream(outputPrefix + ".e");
-    ofstream metaStream(outputPrefix + ".meta");
+    // Open output streams in binary mode
+    ofstream coordStream(outputPrefix + ".xyz", ios::binary);
+    ofstream atomStream(outputPrefix + ".atom", ios::binary);
+    ofstream energyStream(outputPrefix + ".e", ios::binary);
+    ofstream metaStream(outputPrefix + ".meta", ios::binary);
 
     if (!coordStream.is_open() || !atomStream.is_open() || 
         !energyStream.is_open() || !metaStream.is_open()) {
@@ -139,52 +202,13 @@ int main(int argc, char* argv[])
         return 1;
     }
 
-    try {
-        H5::H5File file(filename, H5F_ACC_RDONLY);
+    writeChemDataHeader(filename, coordStream, atomStream, energyStream, metaStream);
+    writeData(filename, coordStream, atomStream, energyStream, metaStream);
 
-        // Open root group
-        H5::Group root = file.openGroup("/");
-
-        // Iterate over root-level groups (e.g., "gdb11_s01")
-        hsize_t nObjs = root.getNumObjs();
-
-        for (hsize_t i = 0; i < nObjs; ++i) {
-            string topLevelName = root.getObjnameByIdx(i);
-            H5G_obj_t type = root.getObjTypeByIdx(i);
-
-            if (type == H5G_GROUP) {
-                H5::Group topLevelGroup = root.openGroup(topLevelName);
-                
-                // Iterate over molecule groups (e.g., "gdb11_s01-0", "gdb11_s01-1", ...)
-                hsize_t nMolObjs = topLevelGroup.getNumObjs();
-                
-                for (hsize_t j = 0; j < nMolObjs; ++j) {
-                    string molName = topLevelGroup.getObjnameByIdx(j);
-                    H5G_obj_t molType = topLevelGroup.getObjTypeByIdx(j);
-                    
-                    if (molType == H5G_GROUP) {
-                        H5::Group molGroup = topLevelGroup.openGroup(molName);
-                        string fullPath = "/" + topLevelName + "/" + molName;
-                        readMolecule(molGroup, fullPath, coordStream, atomStream, 
-                                   energyStream, metaStream);
-                    }
-                }
-            }
-        }
-
-        coordStream.close();
-        atomStream.close();
-        energyStream.close();
-        metaStream.close();
-    }
-    catch (H5::Exception& e) {
-        e.printErrorStack();
-        return 2;
-    }
-    catch (exception& e) {
-        cerr << "Error: " << e.what() << endl;
-        return 3;
-    }
+    coordStream.close();
+    atomStream.close();
+    energyStream.close();
+    metaStream.close();
 
     return 0;
 }
