@@ -1,2 +1,15 @@
 **/bin/
 *.aev
+
+# Binary executables
+*.exe
+*.out
+a.out
+
+# Object files
+*.o
+*.obj
+*.so
+*.a
+*.dylib
+*.dll
