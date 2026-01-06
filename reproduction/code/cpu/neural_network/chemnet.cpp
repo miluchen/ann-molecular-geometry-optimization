@@ -12,7 +12,7 @@
 #include <iostream>
 
 #include "chemnet.h"
-#include "../CBLAS/include/cblas.h"
+#include "cblas.h"
 
 /************* Helper Functions *************/
 inline double activation(double x) { // TODO: a faster implementation f(x) = 0.5 * (x * alpha / (1 + abs(x*alpha)) + 0.5

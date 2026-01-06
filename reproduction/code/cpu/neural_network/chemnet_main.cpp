@@ -49,7 +49,7 @@ int main()
 		error += net.train_adam(pattern, desiredout, PATTERN_COUNT, lambda);
 		error /= PATTERN_COUNT;
 		// display error
-		cout << "ERROR: " << error << "\n";
+		// cout << "ERROR: " << error << "\n";
 		//if (error < 1e-10)
 		//	break;
 	}
